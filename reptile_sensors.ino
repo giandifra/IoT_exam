@@ -9,59 +9,52 @@
 #include "Ticker.h"
 #include <ArduinoJson.h>
 #include <ESP8266mDNS.h>
-
-Ticker ticker;
-ESP8266WebServer server(80);
-
-void tick() {
-  //toggle state
-  int state = digitalRead(BUILTIN_LED);
-  digitalWrite(BUILTIN_LED, !state);
-}
-
-//gets called when WiFiManager enters configuration mode
-void configModeCallback (WiFiManager *myWiFiManager) {
-  Serial.println("Entered config mode");
-  Serial.println(WiFi.softAPIP());
-  //if you used auto generated SSID, print it
-  Serial.println(myWiFiManager->getConfigPortalSSID());
-  //entered config mode, make led toggle faster
-  ticker.attach(0.2, tick);
-}
-
-void startWebServerCallback () {
-  Serial.println("startWebServerCallback");
-  //server.begin();
-}
-
-//called when wifi settings have been changed and connection was successful ( or setBreakAfterConfig(true) )
-void saveConfigCallback() {
-  Serial.println("saveConfigCallback");
-  setupAndStartServer();
-}
-
+#include "display_helper.h"
+#include <InfluxDbClient.h>   /* per libreria di comunicazione con InfluxDB */
+#include <InfluxDbCloud.h>    /* per gestire il token di sicurezza */
 
 #define ONE_HOUR 3600000UL
 #define TRIGGER_PIN D0
 #define ONE_WIRE_PIN D4
 #define RELAY_TEMP D3
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+//#define SCREEN_WIDTH 128 // OLED display width, in pixels
+//#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
-// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
-#define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
+/* costanti per le connesioni */
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+//#define WIFI_SSID       "esercitazioni"
+//#define WIFI_PASSWORD   "uniurbiot2021"
+
+#define INFLUXDB_URL    "http://93.186.254.118:8086"
+#define INFLUXDB_ORG    "uniurb"
+#define INFLUXDB_BUCKET "test"
+#define INFLUXDB_TOKEN "7q44Rz0f0IZYM4SYguqyPB5RPafXPEagZUpRuIUBp3aoDT3HVQzFg5c0Hg_RY8Khk8cH8MjuApdyQsKrFyaF4w=="
+#define _measurement "monitor_task"
+#define host "ESP_GM_Di_Francesco"
+#define location "Sant'Egidio alla Vibrata"
+#define room "camera"
+
+/* un'istanza di InlfuxDbClient */
+InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN,
+                      InfluxDbCloud2CACert);
+
+/* definisco la misura cioè la tabella in cui inserire i dati */
+Point sensorsTable(_measurement);
+
+//Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 WiFiManager wifiManager;
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
+
+Ticker ticker;
+ESP8266WebServer server(80);
 
 bool serpentina = false;
 float maxTempTerra = -127;
 float minTempTerra = 127;
 float maxTemp = 32;
-float minTemp = 28;
+float minTemp = 30;
 
 String nameT1 = "Temp. terra";
 String nameT2 = "Temp";
@@ -92,16 +85,19 @@ void setup() {
   pinMode(BUILTIN_LED, OUTPUT);
   pinMode(RELAY_TEMP, OUTPUT);
 
+  setupDisplay();
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;); // Don't proceed, loop forever
-  }
+  //if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+  //  Serial.println(F("SSD1306 allocation failed"));
+  //  for (;;); // Don't proceed, loop forever
+  //}
 
   display.display();
   delay(500);
   display.clearDisplay();
+  
   String savedSSID = wifiManager.getWiFiSSID(true);
+  
   printText("Provo a connettermi a " + savedSSID);
   display.display();
 
@@ -123,7 +119,10 @@ void setup() {
     Serial.println("connected...yeey :)");
     printText("Connection complete!");
     display.display();
+
+    setupMDNS();
     setupAndStartServer();
+    //setupSensorsTag();
   }
   else {
     Serial.println("Configportal running");
@@ -133,17 +132,32 @@ void setup() {
     display.display();
   }
 
-  /*  if (!MDNS.begin("reptilesensors")) {             // Start the mDNS responder for esp8266.local
-      Serial.println("Error setting up MDNS responder!");
-    }
-  */
-  readAndSaveSensors();
+  //readAndSaveSensors();
 
   // Add service to MDNS-SD
   //MDNS.addService("http", "tcp", 80);
 
   display.clearDisplay();
 }
+
+void setupMDNS() {
+
+  if (!MDNS.begin("esp8266")) {             // Start the mDNS responder for esp8266.local
+    Serial.println("Error setting up MDNS responder!");
+  }
+  Serial.println("mDNS responder started");
+
+}
+
+void setupSensorsTag() {
+
+  /* preparo la connessione su influxDB */
+  /* aggiiungo i tag nel Point per salvare in modo ordinato i dati sul server */
+  sensorsTable.addTag("host", host);
+  sensorsTable.addTag("location", location);
+  sensorsTable.addTag("room", room);
+}
+
 
 int count = 5;
 unsigned long prevCountTemp = 0;
@@ -158,11 +172,13 @@ void loop() {
     delay(1000);
     ESP.restart();
   }
+
   // Every minute, request the temperature
   if (currentMillis - prevTemp > intervalTemp) {
     prevTemp = currentMillis;
     tmpRequested = true;
     readSaveAndShowSensorsData();
+    writeToInfluxDB();
   }
 }
 
@@ -202,7 +218,6 @@ void setupAndStartServer() {
     }
 
     Serial.println("Reporting " + String((int)t1) + "C and " + String((int)t2) + " C");
-
 
     StaticJsonDocument<500> doc;
     JsonObject root = doc.to<JsonObject>();
@@ -289,7 +304,7 @@ void updateDisplay() {
   String st2 = nameT2 + ": " + String(t2) + " C";
   Serial.println(st1);
   Serial.println(st2);
-  printTitle();
+  printTitle(reptileName);
   printText(st1 + String("\n") + st2);
   printText(String("max: ") + maxTempTerra + String(" C\nmin: ") + minTempTerra + String(" C"));
 
@@ -302,6 +317,8 @@ void updateDisplay() {
   printText(serpentinaStatus);
   if (WiFi.status() == WL_CONNECTED) {
     String ssid = wifiManager.getWiFiSSID();
+    //String ip = wifiManager.;
+    String networkInfo;
     if (ssid != NULL) {
       printText("Connesso a: " + ssid);
     }
@@ -312,18 +329,6 @@ void updateDisplay() {
 
   display.display();
 }
-
-/*
-  // HTML & CSS contents which display on web server
-  String HTML = "<!DOCTYPE html>\
-  <html>\
-  <body>\
-    <h1>Reptile Sensors</h1>\
-    <p>Your first Iot Project made with ESP8266</p>\
-    <p>&#128522;</p>\
-  </body>\
-  </html>";
-*/
 
 void handleLogin() {                         // If a POST request is made to URI /login
   if ( ! server.hasArg("t1") || ! server.hasArg("t2") || ! server.hasArg("reptileName") || !server.hasArg("relay1")) { // If the POST request doesn't have username and password data
@@ -399,17 +404,45 @@ void handle_root() {
   server.send(200, "text/html", HTML);
 }
 
-void printTitle() {
-  display.clearDisplay();
-  display.setCursor(0, 0);            // Start at top-left corner
-  display.setTextColor(SSD1306_WHITE);        // Draw white text
-  display.setTextSize(2);
-  display.println(reptileName);
+/* funzione per scrivere su influxDB */
+void writeToInfluxDB() {
+  sensorsTable.clearFields();
+  sensorsTable.addField("temperature_hot_zone", t1);
+  sensorsTable.addField("temperature_cold_zone", t2);
+  sensorsTable.addField("heating_mat_relay", serpentina);
+  Serial.print("Writing: ");
+  Serial.println(sensorsTable.toLineProtocol());
+
+  /* ora scriviamo sul server */
+  if (!client.writePoint(sensorsTable)) {
+    Serial.print("InfluxDB write failed ");
+    Serial.println(client.getLastErrorMessage());
+  }
 }
 
-void printText(String title)
-{
-  display.setTextColor(SSD1306_WHITE);        // Draw white text
-  display.setTextSize(1);             // Normal 1:1 pixel scale
-  display.println(title);
+void tick() {
+  //toggle state
+  int state = digitalRead(BUILTIN_LED);
+  digitalWrite(BUILTIN_LED, !state);
+}
+
+//gets called when WiFiManager enters configuration mode
+void configModeCallback (WiFiManager *myWiFiManager) {
+  Serial.println("Entered config mode");
+  Serial.println(WiFi.softAPIP());
+  //if you used auto generated SSID, print it
+  Serial.println(myWiFiManager->getConfigPortalSSID());
+  //entered config mode, make led toggle faster
+  ticker.attach(0.2, tick);
+}
+
+void startWebServerCallback () {
+  Serial.println("startWebServerCallback");
+  //server.begin();
+}
+
+//called when wifi settings have been changed and connection was successful ( or setBreakAfterConfig(true) )
+void saveConfigCallback() {
+  Serial.println("saveConfigCallback");
+  setupAndStartServer();
 }

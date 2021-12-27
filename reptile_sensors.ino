@@ -10,39 +10,13 @@
 #include <ArduinoJson.h>
 #include <ESP8266mDNS.h>
 #include "display_helper.h"
-#include <InfluxDbClient.h>   /* per libreria di comunicazione con InfluxDB */
-#include <InfluxDbCloud.h>    /* per gestire il token di sicurezza */
+#include "influxdb_helper.h"
 
 #define ONE_HOUR 3600000UL
 #define TRIGGER_PIN D0
 #define ONE_WIRE_PIN D4
 #define RELAY_TEMP D3
 
-//#define SCREEN_WIDTH 128 // OLED display width, in pixels
-//#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-
-/* costanti per le connesioni */
-
-//#define WIFI_SSID       "esercitazioni"
-//#define WIFI_PASSWORD   "uniurbiot2021"
-
-#define INFLUXDB_URL    "http://93.186.254.118:8086"
-#define INFLUXDB_ORG    "uniurb"
-#define INFLUXDB_BUCKET "test"
-#define INFLUXDB_TOKEN "7q44Rz0f0IZYM4SYguqyPB5RPafXPEagZUpRuIUBp3aoDT3HVQzFg5c0Hg_RY8Khk8cH8MjuApdyQsKrFyaF4w=="
-#define _measurement "monitor_task"
-#define host "ESP_GM_Di_Francesco"
-#define location "Sant'Egidio alla Vibrata"
-#define room "camera"
-
-/* un'istanza di InlfuxDbClient */
-InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN,
-                      InfluxDbCloud2CACert);
-
-/* definisco la misura cioè la tabella in cui inserire i dati */
-Point sensorsTable(_measurement);
-
-//Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 WiFiManager wifiManager;
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
@@ -67,7 +41,6 @@ unsigned long lastNTPResponse = millis();
 
 const unsigned long intervalTemp = 30000;   // Do a temperature measurement every 30s
 unsigned long prevTemp = 0;
-bool tmpRequested = false;
 const unsigned long DS_delay = 750;         // Reading the temperature from the DS18x20 can take up to 750ms
 
 uint32_t timeUNIX = 0;                      // The most recent timestamp received from the time server
@@ -86,22 +59,17 @@ void setup() {
   pinMode(RELAY_TEMP, OUTPUT);
 
   setupDisplay();
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  //if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
-  //  Serial.println(F("SSD1306 allocation failed"));
-  //  for (;;); // Don't proceed, loop forever
-  //}
 
   display.display();
   delay(500);
   display.clearDisplay();
-  
+
   String savedSSID = wifiManager.getWiFiSSID(true);
-  
+
   printText("Provo a connettermi a " + savedSSID);
   display.display();
 
-  //wm.resetSettings();
+  wifiManager.resetSettings();
 
   //called after AP mode and config portal has started
   wifiManager.setAPCallback(configModeCallback);
@@ -116,13 +84,7 @@ void setup() {
   wifiManager.setConfigPortalBlocking(false);
 
   if (wifiManager.autoConnect("ReptileSensorsAP")) {
-    Serial.println("connected...yeey :)");
-    printText("Connection complete!");
-    display.display();
-
-    setupMDNS();
-    setupAndStartServer();
-    //setupSensorsTag();
+    onConnected();
   }
   else {
     Serial.println("Configportal running");
@@ -140,6 +102,15 @@ void setup() {
   display.clearDisplay();
 }
 
+void onConnected() {
+  display.display();
+  Serial.println("connected...yeey :)");
+  printText("Connection complete!");
+  setupMDNS();
+  setupAndStartServer();
+  //setupSensorsTag();
+}
+
 void setupMDNS() {
 
   if (!MDNS.begin("esp8266")) {             // Start the mDNS responder for esp8266.local
@@ -147,15 +118,6 @@ void setupMDNS() {
   }
   Serial.println("mDNS responder started");
 
-}
-
-void setupSensorsTag() {
-
-  /* preparo la connessione su influxDB */
-  /* aggiiungo i tag nel Point per salvare in modo ordinato i dati sul server */
-  sensorsTable.addTag("host", host);
-  sensorsTable.addTag("location", location);
-  sensorsTable.addTag("room", room);
 }
 
 
@@ -168,27 +130,32 @@ void loop() {
   server.handleClient();
   unsigned long currentMillis = millis();
 
-  if (digitalRead(TRIGGER_PIN) == LOW ) {
-    delay(1000);
-    ESP.restart();
-  }
+  //checkRestartButton();
 
   // Every minute, request the temperature
   if (currentMillis - prevTemp > intervalTemp) {
+    Serial.println("Update data");
     prevTemp = currentMillis;
-    tmpRequested = true;
-    readSaveAndShowSensorsData();
-    writeToInfluxDB();
+    //readSaveAndShowSensorsData();
+  }
+}
+
+void checkRestartButton() {
+  if (digitalRead(TRIGGER_PIN) == LOW ) {
+    Serial.println("REBOOT ESP");
+    delay(1000);
+    ESP.restart();
   }
 }
 
 void readSaveAndShowSensorsData() {
+  Serial.println("readSaveAndShowSensorsData");
   readAndSaveSensors();
   setUpHotDevice();
   saveMaxAndMinTemp();
   updateDisplay();
+  writeToInfluxDB(t1, t2, serpentina);
 }
-
 
 void setupAndStartServer() {
   Serial.println("setupAndStartServer");
@@ -231,43 +198,13 @@ void setupAndStartServer() {
     server.send(200, "application/json", jsonString);
   });
   server.begin();
+  Serial.println("setupAndStartServer complete");
 }
 
 unsigned int  timeout   = 120; // seconds to run for
 unsigned int  startTime = millis();
 bool portalRunning      = false;
 bool startAP            = false; // start AP and webserver if true, else start only webserver
-
-void doWiFiManager() {
-  // is auto timeout portal running
-  if (portalRunning) {
-    wifiManager.process();
-    if ((millis() - startTime) > (timeout * 1000)) {
-      Serial.println("portaltimeout");
-      portalRunning = false;
-      if (startAP) {
-        wifiManager.stopConfigPortal();
-      } else {
-        wifiManager.stopWebPortal();
-      }
-    }
-  }
-
-  // is configuration portal requested?
-  if (digitalRead(TRIGGER_PIN) == LOW && (!portalRunning)) {
-    if (startAP) {
-      Serial.println("Button Pressed, Starting Config Portal");
-      wifiManager.setConfigPortalBlocking(false);
-      wifiManager.startConfigPortal();
-    }
-    else {
-      Serial.println("Button Pressed, Starting Web Portal");
-      wifiManager.startWebPortal();
-    }
-    portalRunning = true;
-    startTime = millis();
-  }
-}
 
 void saveMaxAndMinTemp() {
   if (t1 > maxTempTerra) {
@@ -382,7 +319,6 @@ void handleLogin() {                         // If a POST request is made to URI
 
 // Handle root url (/)
 void handle_root() {
-
   String t1Html = "<p>" + nameT1 + ": " + String(t1) + " C</p>";
   String t2Html = "<p>" + nameT2 + ": " + String(t2) + " C</p>";
   String hotDeviceHtml;
@@ -404,31 +340,14 @@ void handle_root() {
   server.send(200, "text/html", HTML);
 }
 
-/* funzione per scrivere su influxDB */
-void writeToInfluxDB() {
-  sensorsTable.clearFields();
-  sensorsTable.addField("temperature_hot_zone", t1);
-  sensorsTable.addField("temperature_cold_zone", t2);
-  sensorsTable.addField("heating_mat_relay", serpentina);
-  Serial.print("Writing: ");
-  Serial.println(sensorsTable.toLineProtocol());
-
-  /* ora scriviamo sul server */
-  if (!client.writePoint(sensorsTable)) {
-    Serial.print("InfluxDB write failed ");
-    Serial.println(client.getLastErrorMessage());
-  }
-}
-
 void tick() {
-  //toggle state
   int state = digitalRead(BUILTIN_LED);
   digitalWrite(BUILTIN_LED, !state);
 }
 
 //gets called when WiFiManager enters configuration mode
 void configModeCallback (WiFiManager *myWiFiManager) {
-  Serial.println("Entered config mode");
+  Serial.println("configModeCallback");
   Serial.println(WiFi.softAPIP());
   //if you used auto generated SSID, print it
   Serial.println(myWiFiManager->getConfigPortalSSID());
@@ -444,5 +363,6 @@ void startWebServerCallback () {
 //called when wifi settings have been changed and connection was successful ( or setBreakAfterConfig(true) )
 void saveConfigCallback() {
   Serial.println("saveConfigCallback");
-  setupAndStartServer();
+  ticker.detach();
+  onConnected();
 }

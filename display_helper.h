@@ -1,5 +1,5 @@
-#ifndef DISPLAY_HELPERS_H
-#define DISPLAY_HELPERS_H
+#ifndef DISPLAY_HELPER_H
+#define DISPLAY_HELPER_H
 
 #include <Wire.h>
 #include "Arduino.h"

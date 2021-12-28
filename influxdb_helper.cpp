@@ -12,9 +12,9 @@ void setupSensorsTag() {
 
   /* preparo la connessione su influxDB */
   /* aggiiungo i tag nel Point per salvare in modo ordinato i dati sul server */
-  sensorsTable.addTag("host", host);
-  sensorsTable.addTag("location", location);
-  sensorsTable.addTag("room", room);
+  sensorsTable.addTag("host", _host);
+  sensorsTable.addTag("location", _location);
+  sensorsTable.addTag("room", _room);
 }
 
 /* funzione per scrivere su influxDB */

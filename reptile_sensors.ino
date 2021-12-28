@@ -6,9 +6,9 @@
 #include <DallasTemperature.h>
 #include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include <ESP8266WebServer.h>
-#include "Ticker.h"
 #include <ArduinoJson.h>
 #include <ESP8266mDNS.h>
+#include "Ticker.h"
 #include "display_helper.h"
 #include "influxdb_helper.h"
 
@@ -30,10 +30,10 @@ float minTempTerra = 127;
 float maxTemp = 32;
 float minTemp = 30;
 
-String nameT1 = "Temp. terra";
-String nameT2 = "Temp";
+String nameT1 = "Hot zone";
+String nameT2 = "Cold zone";
 String reptileName = "Reptile";
-String relayName1 = "Disp. 1";
+String relayName1 = "Mat relay";
 
 const unsigned long intervalNTP = ONE_HOUR; // Update the time every hour
 unsigned long prevNTP = 0;
@@ -41,12 +41,10 @@ unsigned long lastNTPResponse = millis();
 
 const unsigned long intervalTemp = 30000;   // Do a temperature measurement every 30s
 unsigned long prevTemp = 0;
-const unsigned long DS_delay = 750;         // Reading the temperature from the DS18x20 can take up to 750ms
+//const unsigned long DS_delay = 750;         // Reading the temperature from the DS18x20 can take up to 750ms
 
-uint32_t timeUNIX = 0;                      // The most recent timestamp received from the time server
 float t1;
 float t2;
-
 
 void setup() {
   WiFi.mode(WIFI_STA); // explicitly set modbe, esp defaults to STA+AP
@@ -60,16 +58,22 @@ void setup() {
 
   setupDisplay();
 
-  display.display();
-  delay(500);
+  setupWifiManager();
+
+  //readAndSaveSensors();
+
   display.clearDisplay();
+}
+
+void setupWifiManager() {
 
   String savedSSID = wifiManager.getWiFiSSID(true);
 
   printText("Provo a connettermi a " + savedSSID);
   display.display();
-
-  wifiManager.resetSettings();
+  
+  // only if we want delete saved network
+  // wifiManager.resetSettings();
 
   //called after AP mode and config portal has started
   wifiManager.setAPCallback(configModeCallback);
@@ -93,36 +97,24 @@ void setup() {
     printText("Connettiti alla rete ReptileSensorsAP e configura il WIFI");
     display.display();
   }
-
-  //readAndSaveSensors();
-
-  // Add service to MDNS-SD
-  //MDNS.addService("http", "tcp", 80);
-
-  display.clearDisplay();
 }
 
 void onConnected() {
   display.display();
-  Serial.println("connected...yeey :)");
+  Serial.println("Connection complete!");
   printText("Connection complete!");
   setupMDNS();
   setupAndStartServer();
+  MDNS.addService("http", "TCP", 80);
   //setupSensorsTag();
 }
 
 void setupMDNS() {
-
-  if (!MDNS.begin("esp8266")) {             // Start the mDNS responder for esp8266.local
+  if (!MDNS.begin("esp8266")) {
     Serial.println("Error setting up MDNS responder!");
   }
   Serial.println("mDNS responder started");
-
 }
-
-
-int count = 5;
-unsigned long prevCountTemp = 0;
 
 void loop() {
   MDNS.update();
@@ -168,7 +160,7 @@ void setupAndStartServer() {
   server.on("/data", HTTP_GET, []() {
 
     if (std::isnan(t1) || std::isnan(t2)) {
-      Serial.println("Failed to read from DHT sensor!");
+      Serial.println("Failed to read from temperature sensor!");
       return;
     }
 
@@ -198,13 +190,7 @@ void setupAndStartServer() {
     server.send(200, "application/json", jsonString);
   });
   server.begin();
-  Serial.println("setupAndStartServer complete");
 }
-
-unsigned int  timeout   = 120; // seconds to run for
-unsigned int  startTime = millis();
-bool portalRunning      = false;
-bool startAP            = false; // start AP and webserver if true, else start only webserver
 
 void saveMaxAndMinTemp() {
   if (t1 > maxTempTerra) {

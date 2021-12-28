@@ -13,6 +13,9 @@ void setupDisplay() {
     Serial.println(F("SSD1306 allocation failed"));
     for (;;); // Don't proceed, loop forever
   }
+  display.display();
+  delay(500);
+  display.clearDisplay();
 }
 
 void printText(String title)

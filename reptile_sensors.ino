@@ -21,6 +21,7 @@ OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
 
 Ticker ticker;
+
 ESP8266WebServer Server;          // Replace with WebServer for ESP32
 AutoConnect      Portal(Server);
 AutoConnectConfig Config;
@@ -210,7 +211,6 @@ void readAndSaveSensors() {
   t1 = sensors.getTempCByIndex(0);
   t2 = sensors.getTempCByIndex(1);
 }
-
 
 void updateDisplay() {
   String st1 = nameT1 + ": " + String(t1) + " C";

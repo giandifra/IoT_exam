@@ -36,7 +36,7 @@ bool serpentina = false;
 float maxTempTerra = -127;
 float minTempTerra = 127;
 float maxTemp = 32;
-float minTemp = 30;
+float minTemp = 31;
 
 String nameT1 = "Hot zone";
 String nameT2 = "Cold zone";
@@ -231,7 +231,7 @@ void updateDisplay() {
   Serial.println(st2);
   printTitle(reptileName);
   printText(st1 + String("\n") + st2);
-  printText(String("max: ") + maxTempTerra + String(" C\nmin: ") + minTempTerra + String(" C"));
+  printText(String("min ") + minTempTerra + String("max ") + maxTempTerra + String(" C"));
 
   String serpentinaStatus;
   if (serpentina) {
@@ -242,15 +242,15 @@ void updateDisplay() {
   printText(serpentinaStatus);
   if (WiFi.status() == WL_CONNECTED) {
     String ssid = WiFi.SSID();
-    //String ip = wifiManager.;
-    String networkInfo;
+    String ip = WiFi.localIP().toString();
+    String networkInfo = ip;
     if (ssid != NULL) {
-      printText("Connesso a: " + ssid);
+      networkInfo = ssid + ": " + ip; 
     }
+    printText(networkInfo);
   } else {
     printText("CP attivo");
   }
-
 
   display.display();
 }

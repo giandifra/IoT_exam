@@ -4,25 +4,26 @@
 #include <Adafruit_SSD1306.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 #include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <ESP8266mDNS.h>
 #include "Ticker.h"
 #include "display_helper.h"
 #include "influxdb_helper.h"
+#include <AutoConnect.h>
 
 #define ONE_HOUR 3600000UL
 #define TRIGGER_PIN D0
 #define ONE_WIRE_PIN D4
 #define RELAY_TEMP D3
 
-WiFiManager wifiManager;
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
 
 Ticker ticker;
-ESP8266WebServer server(80);
+ESP8266WebServer Server;          // Replace with WebServer for ESP32
+AutoConnect      Portal(Server);
+AutoConnectConfig Config;
 
 bool serpentina = false;
 float maxTempTerra = -127;
@@ -45,10 +46,11 @@ unsigned long prevTemp = 0;
 
 float t1;
 float t2;
+String cpIP;
 
 void setup() {
-  WiFi.mode(WIFI_STA); // explicitly set modbe, esp defaults to STA+AP
-
+  //WiFi.mode(WIFI_STA); // explicitly set modbe, esp defaults to STA+AP
+  delay(1000);
   Serial.begin(115200);
   Serial.setDebugOutput(true);
 
@@ -57,46 +59,62 @@ void setup() {
   pinMode(RELAY_TEMP, OUTPUT);
 
   setupDisplay();
-
-  setupWifiManager();
+  setupServerWithAutoConnect();
 
   //readAndSaveSensors();
 
   display.clearDisplay();
 }
 
-void setupWifiManager() {
-
-  String savedSSID = wifiManager.getWiFiSSID(true);
-
-  printText("Provo a connettermi a " + savedSSID);
-  display.display();
+void setupServerWithAutoConnect() {
+  Serial.println("setupServerWithAutoConnect");
+  Config.apid = "Reptile-Sensors-Portal";
+  Config.psk  = "iot2021";
+  Config.autoSave  = AC_SAVECREDENTIAL_NEVER;
+  Config.hostName  = "Reptile-Sensors";
+  Config.retainPortal = true;
+  Config.ticker = true;
+  Portal.config(Config);
+  Portal.onDetect(onStartCaptivePortal);
+  Portal.onConnect(onConnect);
   
-  // only if we want delete saved network
-  // wifiManager.resetSettings();
+  printText("Provo a connettermi a ");
+  display.display();
 
-  //called after AP mode and config portal has started
-  wifiManager.setAPCallback(configModeCallback);
-
-  //called after webserver has started
-  wifiManager.setWebServerCallback(startWebServerCallback);
-
-  //called when wifi settings have been changed and connection was successful ( or setBreakAfterConfig(true) )
-  wifiManager.setSaveConfigCallback(saveConfigCallback);
-
-  wifiManager.setHostname("reptilesensors");
-  wifiManager.setConfigPortalBlocking(false);
-
-  if (wifiManager.autoConnect("ReptileSensorsAP")) {
-    onConnected();
-  }
-  else {
+  setupServerForAutoConnect();
+  if (Portal.begin()) {
+    Serial.println("WiFi connected: " + WiFi.localIP().toString());
+  } else {
     Serial.println("Configportal running");
     display.clearDisplay();
     printText("Connessione non riuscita!");
-    printText("Connettiti alla rete ReptileSensorsAP e configura il WIFI");
+    printText("Connettiti alla rete Reptile-Sensors-Portal e configura il WIFI");
     display.display();
   }
+}
+
+bool onStartCaptivePortal(IPAddress& ip) {
+  Serial.println("onStartCaptivePortal");
+  digitalWrite(BUILTIN_LED, HIGH);
+  Serial.println("C.P. started, IP:" + ip.toString());
+  cpIP = ip.toString();
+  return true;
+}
+
+void onConnect(IPAddress& ipaddr) {
+  Serial.println("onConnect");
+  Serial.print("WiFi connected with ");
+  Serial.print(WiFi.SSID());
+  Serial.print(", IP:");
+  Serial.println(ipaddr.toString());
+
+  display.display();
+  Serial.println("Connection complete!");
+  printText("Connection complete!");
+  setupMDNS();
+  //setupAndStartServer();
+  setupServerForAutoConnect();
+  //setupSensorsTag();
 }
 
 void onConnected() {
@@ -104,22 +122,24 @@ void onConnected() {
   Serial.println("Connection complete!");
   printText("Connection complete!");
   setupMDNS();
-  setupAndStartServer();
-  MDNS.addService("http", "TCP", 80);
+  //setupAndStartServer();
+  setupServerForAutoConnect();
   //setupSensorsTag();
 }
 
 void setupMDNS() {
-  if (!MDNS.begin("esp8266")) {
+  if (MDNS.begin("esp8266")) {
+    MDNS.addService("http", "tcp", 80);
+  } else {
     Serial.println("Error setting up MDNS responder!");
   }
-  Serial.println("mDNS responder started");
 }
 
 void loop() {
   MDNS.update();
-  wifiManager.process();
-  server.handleClient();
+  //wifiManager.process();
+  //server.handleClient();
+  Portal.handleClient();
   unsigned long currentMillis = millis();
 
   //checkRestartButton();
@@ -146,50 +166,20 @@ void readSaveAndShowSensorsData() {
   setUpHotDevice();
   saveMaxAndMinTemp();
   updateDisplay();
-  writeToInfluxDB(t1, t2, serpentina);
+  if (WiFi.status() == WL_CONNECTED) {
+    writeToInfluxDB(t1, t2, serpentina);
+  }else{
+    Serial.println("WIFI not connected: Not sended data to influxDB");
+  }
 }
 
-void setupAndStartServer() {
-  Serial.println("setupAndStartServer");
-  server.close();
-  server.stop();
-  server.on("/", handle_root);
+void setupServerForAutoConnect() {
+  Serial.println("setupAndStartServerForAutoConnect");
+  Server.on("/", handle_root);
+  Server.on("/update", HTTP_POST, handleLogin);
+  Server.on("/data", HTTP_GET, dataPage);
+  Server.on("/data.json", dataJSONPage);
 
-  server.on("/update", HTTP_POST, handleLogin);
-
-  server.on("/data", HTTP_GET, []() {
-
-    if (std::isnan(t1) || std::isnan(t2)) {
-      Serial.println("Failed to read from temperature sensor!");
-      return;
-    }
-
-    String webString = "Humiditiy " + String((int)t1) + " C: " + String((int)t2) + " C";
-    Serial.println(webString);
-    server.send(200, "text/plain", webString);
-  });
-
-  server.on("/data.json", []() {
-
-    if (std::isnan(t1) || std::isnan(t2)) {
-      Serial.println("Failed to read from sensor!");
-      return;
-    }
-
-    Serial.println("Reporting " + String((int)t1) + "C and " + String((int)t2) + " C");
-
-    StaticJsonDocument<500> doc;
-    JsonObject root = doc.to<JsonObject>();
-    root["t1"] = t1;
-    root["t2"] = t2;
-
-    String jsonString;
-    serializeJson(doc, jsonString);
-
-    Serial.println(jsonString);
-    server.send(200, "application/json", jsonString);
-  });
-  server.begin();
 }
 
 void saveMaxAndMinTemp() {
@@ -239,7 +229,7 @@ void updateDisplay() {
   }
   printText(serpentinaStatus);
   if (WiFi.status() == WL_CONNECTED) {
-    String ssid = wifiManager.getWiFiSSID();
+    String ssid = WiFi.SSID();
     //String ip = wifiManager.;
     String networkInfo;
     if (ssid != NULL) {
@@ -254,52 +244,52 @@ void updateDisplay() {
 }
 
 void handleLogin() {                         // If a POST request is made to URI /login
-  if ( ! server.hasArg("t1") || ! server.hasArg("t2") || ! server.hasArg("reptileName") || !server.hasArg("relay1")) { // If the POST request doesn't have username and password data
-    server.send(400, "text/plain", "400: Invalid Request");         // The request is invalid, so send HTTP status 400
+  if ( ! Server.hasArg("t1") || ! Server.hasArg("t2") || ! Server.hasArg("reptileName") || !Server.hasArg("relay1")) { // If the POST request doesn't have username and password data
+    Server.send(400, "text/plain", "400: Invalid Request");         // The request is invalid, so send HTTP status 400
     return;
   }
 
-  String tmp1 = server.arg("t1");
+  String tmp1 = Server.arg("t1");
   if (tmp1 != NULL) {
     nameT1 = tmp1;
     Serial.println("Nuovo nome sensore 1: " + nameT1);
   }
 
-  String tmp2 = server.arg("t2");
+  String tmp2 = Server.arg("t2");
   if (tmp2 != NULL) {
 
     nameT2 = tmp2;
     Serial.println("Nuovo nome sensore 2: " + nameT2);
   }
 
-  String tmp3 = server.arg("reptileName");
+  String tmp3 = Server.arg("reptileName");
   if (tmp3 != NULL) {
     reptileName = tmp3;
     Serial.println("Nuovo nome rettile: " + reptileName);
   }
 
 
-  String tmp4 = server.arg("relay1");
+  String tmp4 = Server.arg("relay1");
   if (tmp4 != NULL) {
 
     relayName1 = tmp4;
     Serial.println("Nuovo nome dispositivo 1: " + relayName1);
   }
 
-  String tmp5 = server.arg("maxTemp");
+  String tmp5 = Server.arg("maxTemp");
   if (tmp5 != NULL) {
     maxTemp  = String(tmp5).toFloat();
     Serial.println("Nuovo parametro temp. max " + String(maxTemp));
   }
 
-  String tmp6 = server.arg("minTemp");
+  String tmp6 = Server.arg("minTemp");
   if (tmp6 != NULL) {
     minTemp  = String(tmp6).toFloat();
     Serial.println("Nuovo parametro temp. min " + String(minTemp));
   }
 
   updateDisplay();
-  server.send(200, "text/html", "Configurazione completata");
+  Server.send(200, "text/html", "Configurazione completata");
 
 }
 
@@ -314,41 +304,53 @@ void handle_root() {
     hotDeviceHtml = "<p>" + relayName1 + ": SPENTO</p>";
   }
 
+  String captivePortalInfo = "<h2> Captive Portal ip: " + cpIP + "</h2>";
   String reptileNameString = "<h2>" + reptileName + "</h2>";
   String maxTempString = "<p>Temperatura massima impostata a: " + String(maxTemp) + " C</p>";
   String minTempString = "<p>Temperatura minima impostata a: " + String(minTemp) + " C</p>";
   String updateButton = "<button onClick=\"window.location.reload();\">Aggiorna</button></br></br>";
+  String deleteCredentialButton = "<button onClick=\"window.location.reload();\">Aggiorna</button></br></br>";
   String maxTempInput = "<input type=\"number\" name=\"maxTemp\" maxlength=\"2\" placeholder=\"Temperatura massima\"></br>";
   String minTempInput = "<input type=\"number\" name=\"minTemp\" maxlength=\"2\" placeholder=\"Temperatura minima\"></br>";
   String form = "<form action=\"/update\" method=\"POST\"><input type=\"text\" name=\"reptileName\" maxlength=\"10\" placeholder=\"Nome rettile\"></br><input type=\"text\" name=\"t1\" maxlength=\"13\" placeholder=\"Nome sensore 1\"></br><input type=\"text\" name=\"t2\" maxlength=\"13\" placeholder=\"Nome Sensore 2\"></br><input type=\"text\" name=\"relay1\" placeholder=\"Nome Dispositivo 1\"></br>" + maxTempInput + minTempInput + "</br><input type=\"submit\" value=\"Salva\"></form>";
-  String HTML = "<!DOCTYPE html><html><body><h1>Reptile Sensors</h1>" + reptileNameString + t1Html + t2Html + maxTempString + minTempString +  hotDeviceHtml + updateButton + form + "</body></html>" ;
+  String HTML = "<!DOCTYPE html><html><body><h1>Reptile Sensors</h1>" + captivePortalInfo + reptileNameString + t1Html + t2Html + maxTempString + minTempString +  hotDeviceHtml + updateButton + form + "</body></html>" ;
 
-  server.send(200, "text/html", HTML);
+  Server.send(200, "text/html", HTML);
+}
+
+void dataPage() {
+  if (std::isnan(t1) || std::isnan(t2)) {
+    Serial.println("Failed to read from temperature sensor!");
+    return;
+  }
+
+  String webString = "Humiditiy " + String((int)t1) + " C: " + String((int)t2) + " C";
+  Serial.println(webString);
+  Server.send(200, "text/plain", webString);
+}
+
+void dataJSONPage() {
+  if (std::isnan(t1) || std::isnan(t2)) {
+    Serial.println("Failed to read from sensor!");
+    return;
+  }
+
+  Serial.println("Reporting " + String((int)t1) + "C and " + String((int)t2) + " C");
+
+  StaticJsonDocument<500> doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["t1"] = t1;
+  root["t2"] = t2;
+
+  String jsonString;
+  serializeJson(doc, jsonString);
+
+  Serial.println(jsonString);
+  Server.send(200, "application/json", jsonString);
+
 }
 
 void tick() {
   int state = digitalRead(BUILTIN_LED);
   digitalWrite(BUILTIN_LED, !state);
-}
-
-//gets called when WiFiManager enters configuration mode
-void configModeCallback (WiFiManager *myWiFiManager) {
-  Serial.println("configModeCallback");
-  Serial.println(WiFi.softAPIP());
-  //if you used auto generated SSID, print it
-  Serial.println(myWiFiManager->getConfigPortalSSID());
-  //entered config mode, make led toggle faster
-  ticker.attach(0.2, tick);
-}
-
-void startWebServerCallback () {
-  Serial.println("startWebServerCallback");
-  //server.begin();
-}
-
-//called when wifi settings have been changed and connection was successful ( or setBreakAfterConfig(true) )
-void saveConfigCallback() {
-  Serial.println("saveConfigCallback");
-  ticker.detach();
-  onConnected();
 }

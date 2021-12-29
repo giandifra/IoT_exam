@@ -17,7 +17,7 @@
 
 
 /* un'istanza di InlfuxDbClient */
-extern InfluxDBClient client;
+extern InfluxDBClient influxDBClient;
 
 /* definisco la misura cioè la tabella in cui inserire i dati */
 extern Point sensorsTable;

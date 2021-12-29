@@ -2,7 +2,7 @@
 #include "Arduino.h"
 
 /* un'istanza di InlfuxDbClient */
-InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN,
+InfluxDBClient influxDBClient(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN,
                       InfluxDbCloud2CACert);
 
 /* definisco la misura cioè la tabella in cui inserire i dati */
@@ -27,8 +27,8 @@ void writeToInfluxDB(float t1, float t2, bool relay_status) {
   Serial.println(sensorsTable.toLineProtocol());
 
   /* ora scriviamo sul server */
-  if (!client.writePoint(sensorsTable)) {
+  if (!influxDBClient.writePoint(sensorsTable)) {
     Serial.print("InfluxDB write failed ");
-    Serial.println(client.getLastErrorMessage());
+    Serial.println(influxDBClient.getLastErrorMessage());
   }
 }

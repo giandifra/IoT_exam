@@ -4,18 +4,23 @@
 #include <Adafruit_SSD1306.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
-#include <ESP8266mDNS.h>
 #include "Ticker.h"
+
 #include "display_helper.h"
 #include "influxdb_helper.h"
+
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
 #include <AutoConnect.h>
+#include <ESP8266mDNS.h>
 
 #define ONE_HOUR 3600000UL
 #define TRIGGER_PIN D0
 #define ONE_WIRE_PIN D4
 #define RELAY_TEMP D3
+#define CP_PASSWORD "iot_2021"
+#define AC_DEBUG
 
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
@@ -24,6 +29,7 @@ Ticker ticker;
 
 ESP8266WebServer Server;          // Replace with WebServer for ESP32
 AutoConnect      Portal(Server);
+//AutoConnectConfig config("ciaociao", "iot2021");
 AutoConnectConfig Config;
 
 bool serpentina = false;
@@ -50,55 +56,71 @@ float t2;
 String cpIP;
 
 void setup() {
-  //WiFi.mode(WIFI_STA); // explicitly set modbe, esp defaults to STA+AP
   delay(1000);
   Serial.begin(115200);
   Serial.setDebugOutput(true);
 
   pinMode(TRIGGER_PIN, INPUT_PULLUP);
-  pinMode(BUILTIN_LED, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
   pinMode(RELAY_TEMP, OUTPUT);
 
   setupDisplay();
-  setupServerWithAutoConnect();
 
-  //readAndSaveSensors();
+  printText("Provo a connettermi ad una rete conosciuta ");
+  display.display();
 
+  setupAutoConnect();
+  readAndSaveSensors();
   display.clearDisplay();
 }
 
-void setupServerWithAutoConnect() {
-  Serial.println("setupServerWithAutoConnect");
+bool whileCP(void) {
+  bool  rc = false;
+  // Here, something to process while the captive portal is open.
+  // To escape from the captive portal loop, this exit function returns false.
+  // rc = true;, or rc = false;
+  return rc;
+}
+
+void setupAutoConnect() {
+  Serial.println("setupAutoConnect");
+
   Config.apid = "Reptile-Sensors-Portal";
-  Config.psk  = "iot2021";
+  Config.psk  = CP_PASSWORD;
   Config.autoSave  = AC_SAVECREDENTIAL_NEVER;
   Config.hostName  = "Reptile-Sensors";
   Config.retainPortal = true;
   Config.ticker = true;
+
   Portal.config(Config);
+  Portal.whileCaptivePortal(whileCP);
   Portal.onDetect(onStartCaptivePortal);
   Portal.onConnect(onConnect);
-  
-  printText("Provo a connettermi a ");
-  display.display();
 
-  setupServerForAutoConnect();
+  setupServer();
   if (Portal.begin()) {
     Serial.println("WiFi connected: " + WiFi.localIP().toString());
-  } else {
-    Serial.println("Configportal running");
-    display.clearDisplay();
-    printText("Connessione non riuscita!");
-    printText("Connettiti alla rete Reptile-Sensors-Portal e configura il WIFI");
-    display.display();
   }
+}
+
+void showNoWiFiConnectionMessage(String ip) {
+  Serial.println("showNoWiFiConnectionMessage");
+  display.clearDisplay();
+  printText("NO WIFI - CP Attivo");
+  String message = "Connettiti a Reptile-Sensors-Portal e configura il WIFI";
+  if (!message.isEmpty()) {
+    message = message + ": " + cpIP;
+  }
+  printText(message);
+  display.display();
 }
 
 bool onStartCaptivePortal(IPAddress& ip) {
   Serial.println("onStartCaptivePortal");
-  digitalWrite(BUILTIN_LED, HIGH);
-  Serial.println("C.P. started, IP:" + ip.toString());
   cpIP = ip.toString();
+  digitalWrite(LED_BUILTIN, HIGH);
+  Serial.println("C.P. started, IP:" + cpIP);
+  showNoWiFiConnectionMessage(cpIP);
   return true;
 }
 
@@ -108,24 +130,14 @@ void onConnect(IPAddress& ipaddr) {
   Serial.print(WiFi.SSID());
   Serial.print(", IP:");
   Serial.println(ipaddr.toString());
-
-  display.display();
   Serial.println("Connection complete!");
-  printText("Connection complete!");
-  setupMDNS();
-  //setupAndStartServer();
-  setupServerForAutoConnect();
-  //setupSensorsTag();
-}
 
-void onConnected() {
-  display.display();
-  Serial.println("Connection complete!");
+  display.clearDisplay();
   printText("Connection complete!");
+  display.display();
+
   setupMDNS();
-  //setupAndStartServer();
-  setupServerForAutoConnect();
-  //setupSensorsTag();
+  setupSensorsTag();
 }
 
 void setupMDNS() {
@@ -143,13 +155,13 @@ void loop() {
   Portal.handleClient();
   unsigned long currentMillis = millis();
 
-  //checkRestartButton();
+  checkRestartButton();
 
   // Every minute, request the temperature
   if (currentMillis - prevTemp > intervalTemp) {
     Serial.println("Update data");
     prevTemp = currentMillis;
-    //readSaveAndShowSensorsData();
+    readSaveAndShowSensorsData();
   }
 }
 
@@ -169,13 +181,13 @@ void readSaveAndShowSensorsData() {
   updateDisplay();
   if (WiFi.status() == WL_CONNECTED) {
     writeToInfluxDB(t1, t2, serpentina);
-  }else{
+  } else {
     Serial.println("WIFI not connected: Not sended data to influxDB");
   }
 }
 
-void setupServerForAutoConnect() {
-  Serial.println("setupAndStartServerForAutoConnect");
+void setupServer() {
+  Serial.println("setupServer");
   Server.on("/", handle_root);
   Server.on("/update", HTTP_POST, handleLogin);
   Server.on("/data", HTTP_GET, dataPage);
@@ -236,7 +248,7 @@ void updateDisplay() {
       printText("Connesso a: " + ssid);
     }
   } else {
-    printText("Connessione assente...");
+    printText("CP attivo");
   }
 
 
@@ -351,6 +363,6 @@ void dataJSONPage() {
 }
 
 void tick() {
-  int state = digitalRead(BUILTIN_LED);
-  digitalWrite(BUILTIN_LED, !state);
+  int state = digitalRead(LED_BUILTIN);
+  digitalWrite(LED_BUILTIN, !state);
 }

@@ -8,7 +8,9 @@
 #define INFLUXDB_URL    "http://93.186.254.118:8086"
 #define INFLUXDB_ORG    "uniurb"
 #define INFLUXDB_BUCKET "esercitazioni"
-#define INFLUXDB_TOKEN "7q44Rz0f0IZYM4SYguqyPB5RPafXPEagZUpRuIUBp3aoDT3HVQzFg5c0Hg_RY8Khk8cH8MjuApdyQsKrFyaF4w=="
+#define INFLUXDB_TOKEN "0s5ZuEkoUpmjulLxgpZfnXeiN1RU5tafsDkZ_bSdB-DzeDXQeN8k03ylXMREBwqYKd46oLq0Se8Qc13IjOuF-A=="
+//#define INFLUXDB_BUCKET "test"
+//#define INFLUXDB_TOKEN "7q44Rz0f0IZYM4SYguqyPB5RPafXPEagZUpRuIUBp3aoDT3HVQzFg5c0Hg_RY8Khk8cH8MjuApdyQsKrFyaF4w=="
 
 #define _measurement "monitor_task"
 #define _host "ESP_GM_Di_Francesco"
@@ -23,6 +25,6 @@ extern InfluxDBClient influxDBClient;
 extern Point sensorsTable;
 
 void setupSensorsTag();
-void writeToInfluxDB(float t1, float t2, bool relay_status);
+void writeToInfluxDB(float t1, float t2, int relay_status);
 
 #endif

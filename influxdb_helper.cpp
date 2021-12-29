@@ -18,11 +18,11 @@ void setupSensorsTag() {
 }
 
 /* funzione per scrivere su influxDB */
-void writeToInfluxDB(float t1, float t2, bool relay_status) {
+void writeToInfluxDB(float t1, float t2, int relay_status) {
   sensorsTable.clearFields();
-  sensorsTable.addField("temperature_hot_zone", t1);
-  sensorsTable.addField("temperature_cold_zone", t2);
-  sensorsTable.addField("heating_mat_relay", relay_status);
+  sensorsTable.addField("t_hot_zone", t1);
+  sensorsTable.addField("t_cold_zone", t2);
+  sensorsTable.addField("heating_mat_status", relay_status);
   Serial.print("Writing: ");
   Serial.println(sensorsTable.toLineProtocol());
 

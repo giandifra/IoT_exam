@@ -17,20 +17,25 @@
 
 #define ONE_HOUR 3600000UL
 #define TRIGGER_PIN D0
-#define ONE_WIRE_PIN D4
+
+// GPIO where the DS18B20 is connected t
+#define ONE_WIRE_BUS_PIN D4
 #define RELAY_TEMP D3
 #define CP_PASSWORD "iot_2021"
+#define CP_SSID "Reptile-Sensors-Portal"
 #define AC_DEBUG
 #define SW_VERSION "GM Di Francesco 0.1.1"
 
-OneWire oneWire(ONE_WIRE_PIN);
-DallasTemperature sensors(&oneWire);
+// Setup a oneWire instance to communicate with any OneWire devices
+OneWire oneWireBus(ONE_WIRE_BUS_PIN);
+
+// Pass our oneWire reference to Dallas Temperature sensor
+DallasTemperature sensors(&oneWireBus);
 
 Ticker ticker;
 
 ESP8266WebServer Server;          // Replace with WebServer for ESP32
 AutoConnect      Portal(Server);
-//AutoConnectConfig config("ciaociao", "iot2021");
 AutoConnectConfig Config;
 
 bool heating_mat_status = false;
@@ -44,13 +49,8 @@ String nameT2 = "Cold zone";
 String reptileName = "Reptile";
 String relayName1 = "Mat relay";
 
-const unsigned long intervalNTP = ONE_HOUR; // Update the time every hour
-unsigned long prevNTP = 0;
-unsigned long lastNTPResponse = millis();
-
 const unsigned long intervalTemp = 30000;   // Do a temperature measurement every 30s
 unsigned long prevTemp = 0;
-//const unsigned long DS_delay = 750;         // Reading the temperature from the DS18x20 can take up to 750ms
 
 float t1;
 float t2;
@@ -71,8 +71,15 @@ void setup() {
   display.display();
 
   setupAutoConnect();
+  startSensors();
   readAndSaveSensors();
   display.clearDisplay();
+}
+
+void startSensors() {
+  Serial.println("startSensors");
+  // Start the DS18B20 sensor
+  sensors.begin();
 }
 
 bool whileCP(void) {
@@ -83,7 +90,7 @@ bool whileCP(void) {
 void setupAutoConnect() {
   Serial.println("setupAutoConnect");
 
-  Config.apid = "Reptile-Sensors-Portal";
+  Config.apid = CP_SSID;
   Config.psk  = CP_PASSWORD;
   Config.autoSave  = AC_SAVECREDENTIAL_NEVER;
   Config.hostName  = "Reptile-Sensors";
@@ -139,7 +146,7 @@ void onConnect(IPAddress& ipaddr) {
 }
 
 void setupMDNS() {
-  if (MDNS.begin("esp8266")) {
+  if (MDNS.begin("reptile-sensors")) {
     MDNS.addService("http", "tcp", 80);
   } else {
     Serial.println("Error setting up MDNS responder!");
@@ -153,9 +160,9 @@ void loop() {
   Portal.handleClient();
   unsigned long currentMillis = millis();
 
-  checkRestartButton();
+  //checkRestartButton();
 
-  // Every minute, request the temperature
+  // Every 30 seconds, request the temperature
   if (currentMillis - prevTemp > intervalTemp) {
     Serial.println("Update data");
     prevTemp = currentMillis;
@@ -234,8 +241,16 @@ void readAndSaveSensors() {
 }
 
 void updateDisplay() {
-  String st1 = nameT1 + ": " + String(t1) + " C";
-  String st2 = nameT2 + ": " + String(t2) + " C";
+  String _t1 = "--";
+  String _t2 = "--";
+  if (t1 != -127) {
+    _t1 = String(t1);
+  }
+  if (t2 != -127) {
+    _t2 = String(t2);
+  }
+  String st1 = nameT1 + ": " + _t1 + " C";
+  String st2 = nameT2 + ": " + _t2 + " C";
   Serial.println(st1);
   Serial.println(st2);
   printTitle(reptileName);

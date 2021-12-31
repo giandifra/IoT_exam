@@ -21,6 +21,7 @@
 #define RELAY_TEMP D3
 #define CP_PASSWORD "iot_2021"
 #define AC_DEBUG
+#define SW_VERSION "GM Di Francesco 0.1.0"
 
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
@@ -32,7 +33,7 @@ AutoConnect      Portal(Server);
 //AutoConnectConfig config("ciaociao", "iot2021");
 AutoConnectConfig Config;
 
-bool serpentina = false;
+bool heating_mat_status = false;
 float maxTempTerra = -127;
 float minTempTerra = 127;
 float maxTemp = 32;
@@ -59,7 +60,7 @@ void setup() {
   delay(1000);
   Serial.begin(115200);
   Serial.setDebugOutput(true);
-
+  Serial.println(SW_VERSION);
   pinMode(TRIGGER_PIN, INPUT_PULLUP);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(RELAY_TEMP, OUTPUT);
@@ -76,9 +77,6 @@ void setup() {
 
 bool whileCP(void) {
   bool  rc = false;
-  // Here, something to process while the captive portal is open.
-  // To escape from the captive portal loop, this exit function returns false.
-  // rc = true;, or rc = false;
   return rc;
 }
 
@@ -167,7 +165,8 @@ void loop() {
 
 void checkRestartButton() {
   if (digitalRead(TRIGGER_PIN) == LOW ) {
-    Serial.println("REBOOT ESP");
+    Serial.println("checkRestartButton");
+    Serial.println("checkRestartButton REBOOT ESP");
     delay(1000);
     ESP.restart();
   }
@@ -180,7 +179,13 @@ void readSaveAndShowSensorsData() {
   saveMaxAndMinTemp();
   updateDisplay();
   if (WiFi.status() == WL_CONNECTED) {
-    writeToInfluxDB(t1, t2, serpentina);
+    Serial.println("WIFI Connected");
+    if (t1 == -127.0 || t2 == -127.0 ) {
+      Serial.println("Data is not sent to influxDB: t1 OR t2 invalid value");
+    } else {
+       Serial.println("Writing to influxDB...");
+      writeToInfluxDB(t1, t2, heating_mat_status);
+    }
   } else {
     Serial.println("WIFI not connected: Not sended data to influxDB");
   }
@@ -196,6 +201,7 @@ void setupServer() {
 }
 
 void saveMaxAndMinTemp() {
+  Serial.println("saveMaxAndMinTemp");
   if (t1 > maxTempTerra) {
     maxTempTerra = t1;
   }
@@ -206,13 +212,14 @@ void saveMaxAndMinTemp() {
 }
 
 void setUpHotDevice() {
+  Serial.println("setUpHotDevice");
   if (t1 > maxTemp) {
     Serial.println("Spengo Serpentina");
-    serpentina = false;
+    heating_mat_status = false;
     digitalWrite(RELAY_TEMP, 0);
   } else if (t1 < minTemp) {
     Serial.println("Accendo Serpentina");
-    serpentina = true;
+    heating_mat_status = true;
     digitalWrite(RELAY_TEMP, 1);
   }
 }
@@ -222,6 +229,8 @@ void readAndSaveSensors() {
   sensors.requestTemperatures();
   t1 = sensors.getTempCByIndex(0);
   t2 = sensors.getTempCByIndex(1);
+  Serial.println(t1);
+  Serial.println(t2);
 }
 
 void updateDisplay() {
@@ -234,7 +243,7 @@ void updateDisplay() {
   printText(String("min ") + minTempTerra + String("max ") + maxTempTerra + String(" C"));
 
   String serpentinaStatus;
-  if (serpentina) {
+  if (heating_mat_status) {
     serpentinaStatus = relayName1 + ": ON";
   } else {
     serpentinaStatus = relayName1 + ": OFF";
@@ -245,7 +254,7 @@ void updateDisplay() {
     String ip = WiFi.localIP().toString();
     String networkInfo = ip;
     if (ssid != NULL) {
-      networkInfo = ssid + ": " + ip; 
+      networkInfo = ssid + ": " + ip;
     }
     printText(networkInfo);
   } else {
@@ -310,7 +319,7 @@ void handle_root() {
   String t1Html = "<p>" + nameT1 + ": " + String(t1) + " C</p>";
   String t2Html = "<p>" + nameT2 + ": " + String(t2) + " C</p>";
   String hotDeviceHtml;
-  if (serpentina) {
+  if (heating_mat_status) {
     hotDeviceHtml = "<p>" + relayName1 + ": ATTIVO</p>";
   } else {
     hotDeviceHtml = "<p>" + relayName1 + ": SPENTO</p>";

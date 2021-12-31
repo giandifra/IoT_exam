@@ -21,7 +21,7 @@
 #define RELAY_TEMP D3
 #define CP_PASSWORD "iot_2021"
 #define AC_DEBUG
-#define SW_VERSION "GM Di Francesco 0.1.0"
+#define SW_VERSION "GM Di Francesco 0.1.1"
 
 OneWire oneWire(ONE_WIRE_PIN);
 DallasTemperature sensors(&oneWire);
@@ -183,7 +183,7 @@ void readSaveAndShowSensorsData() {
     if (t1 == -127.0 || t2 == -127.0 ) {
       Serial.println("Data is not sent to influxDB: t1 OR t2 invalid value");
     } else {
-       Serial.println("Writing to influxDB...");
+      Serial.println("Writing to influxDB...");
       writeToInfluxDB(t1, t2, heating_mat_status);
     }
   } else {
@@ -325,7 +325,10 @@ void handle_root() {
     hotDeviceHtml = "<p>" + relayName1 + ": SPENTO</p>";
   }
 
-  String captivePortalInfo = "<h2> Captive Portal ip: " + cpIP + "</h2>";
+  String captivePortalInfo = "";
+  if (c!pIP.isEmpty()) {
+    captivePortalInfo = "<p> Captive Portal ip: " + cpIP + "</p>";
+  }
   String reptileNameString = "<h2>" + reptileName + "</h2>";
   String maxTempString = "<p>Temperatura massima impostata a: " + String(maxTemp) + " C</p>";
   String minTempString = "<p>Temperatura minima impostata a: " + String(minTemp) + " C</p>";

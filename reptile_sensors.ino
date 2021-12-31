@@ -326,7 +326,7 @@ void handle_root() {
   }
 
   String captivePortalInfo = "";
-  if (c!pIP.isEmpty()) {
+  if (!cpIP.isEmpty()) {
     captivePortalInfo = "<p> Captive Portal ip: " + cpIP + "</p>";
   }
   String reptileNameString = "<h2>" + reptileName + "</h2>";

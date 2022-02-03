@@ -5,7 +5,6 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <ArduinoJson.h>
-#include "Ticker.h"
 
 #include "display_helper.h"
 #include "influxdb_helper.h"
@@ -15,26 +14,18 @@
 #include <AutoConnect.h>
 #include <ESP8266mDNS.h>
 
-#define ONE_HOUR 3600000UL
-#define TRIGGER_PIN D0
-
-// GPIO where the DS18B20 is connected t
 #define ONE_WIRE_BUS_PIN D4
 #define RELAY_TEMP D3
-#define CP_PASSWORD "iot_2021"
+#define BUZZER D7
 #define CP_SSID "Reptile-Sensors-Portal"
-#define AC_DEBUG
+#define CP_PASSWORD "iot_2021"
 #define SW_VERSION "GM Di Francesco 0.1.1"
 
-// Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWireBus(ONE_WIRE_BUS_PIN);
 
-// Pass our oneWire reference to Dallas Temperature sensor
 DallasTemperature sensors(&oneWireBus);
 
-Ticker ticker;
-
-ESP8266WebServer Server;          // Replace with WebServer for ESP32
+ESP8266WebServer Server;
 AutoConnect      Portal(Server);
 AutoConnectConfig Config;
 
@@ -44,13 +35,16 @@ float minTempTerra = 127;
 float maxTemp = 32;
 float minTemp = 31;
 
-String nameT1 = "Hot zone";
-String nameT2 = "Cold zone";
+String nameT1 = "Zona calda";
+String nameT2 = "Zona fredda";
 String reptileName = "Reptile";
-String relayName1 = "Mat relay";
+String relayName1 = "Relay tappetino";
 
-const unsigned long intervalTemp = 30000;   // Do a temperature measurement every 30s
-unsigned long prevTemp = 0;
+const unsigned long thirtySeconds = 30000;   // Do a temperature measurement every 30s
+const unsigned long fiveMinutes = 5 * 60000;   // Do a temperature measurement every 30s
+unsigned long lastReadTime = 0;
+
+int MAX_TEMP_OVERLOAD = 2;
 
 float t1;
 float t2;
@@ -61,10 +55,8 @@ void setup() {
   Serial.begin(115200);
   Serial.setDebugOutput(true);
   Serial.println(SW_VERSION);
-  pinMode(TRIGGER_PIN, INPUT_PULLUP);
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(RELAY_TEMP, OUTPUT);
 
+  setupPin();
   setupDisplay();
 
   printText("Provo a connettermi ad una rete conosciuta ");
@@ -72,19 +64,24 @@ void setup() {
 
   setupAutoConnect();
   startSensors();
-  readAndSaveSensors();
+  readTemperatures();
   display.clearDisplay();
+}
+
+
+void setupPin() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(RELAY_TEMP, OUTPUT);
+  pinMode (BUZZER, OUTPUT);
 }
 
 void startSensors() {
   Serial.println("startSensors");
-  // Start the DS18B20 sensor
   sensors.begin();
 }
 
 bool whileCP(void) {
-  bool  rc = false;
-  return rc;
+  return false;
 }
 
 void setupAutoConnect() {
@@ -155,36 +152,27 @@ void setupMDNS() {
 
 void loop() {
   MDNS.update();
-  //wifiManager.process();
-  //server.handleClient();
   Portal.handleClient();
   unsigned long currentMillis = millis();
 
-  //checkRestartButton();
-
   // Every 30 seconds, request the temperature
-  if (currentMillis - prevTemp > intervalTemp) {
+  if (currentMillis - lastReadTime > thirtySeconds) {
     Serial.println("Update data");
-    prevTemp = currentMillis;
+    lastReadTime = currentMillis;
     readSaveAndShowSensorsData();
-  }
-}
-
-void checkRestartButton() {
-  if (digitalRead(TRIGGER_PIN) == LOW ) {
-    Serial.println("checkRestartButton");
-    Serial.println("checkRestartButton REBOOT ESP");
-    delay(1000);
-    ESP.restart();
   }
 }
 
 void readSaveAndShowSensorsData() {
   Serial.println("readSaveAndShowSensorsData");
-  readAndSaveSensors();
-  setUpHotDevice();
+  readTemperatures();
+  setUpHeatMat();
   saveMaxAndMinTemp();
   updateDisplay();
+  sendDataToInfluxDB();
+}
+
+void sendDataToInfluxDB() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("WIFI Connected");
     if (t1 == -127.0 || t2 == -127.0 ) {
@@ -200,8 +188,8 @@ void readSaveAndShowSensorsData() {
 
 void setupServer() {
   Serial.println("setupServer");
-  Server.on("/", handle_root);
-  Server.on("/update", HTTP_POST, handleLogin);
+  Server.on("/", handleRoot);
+  Server.on("/update", HTTP_POST, setupConfigParams);
   Server.on("/data", HTTP_GET, dataPage);
   Server.on("/data.json", dataJSONPage);
 
@@ -218,20 +206,42 @@ void saveMaxAndMinTemp() {
   }
 }
 
-void setUpHotDevice() {
-  Serial.println("setUpHotDevice");
+void setUpHeatMat() {
+  Serial.println("setUpHeatMat");
+  unsigned long currentMillis = millis();
   if (t1 > maxTemp) {
-    Serial.println("Spengo Serpentina");
+    Serial.println("Turn OFF heat mat");
     heating_mat_status = false;
     digitalWrite(RELAY_TEMP, 0);
+
+    securityCheck(t1 - maxTemp, currentMillis);
+
   } else if (t1 < minTemp) {
-    Serial.println("Accendo Serpentina");
+    Serial.println("Turn ON heat mat");
     heating_mat_status = true;
     digitalWrite(RELAY_TEMP, 1);
+
+    securityCheck(minTemp - t1, currentMillis);
+
+  } else {
+    digitalWrite (BUZZER, LOW); //turn buzzer off
   }
 }
 
-void readAndSaveSensors() {
+//Check temperature under/overload
+//If the temperature is great then maxTemp + MAX_TEMP_OVERLOAD or min
+void securityCheck(float differenceTemp, unsigned long currentMillis) {
+  if (differenceTemp  > MAX_TEMP_OVERLOAD) {
+    Serial.println("Turn ON BUZZER");
+    digitalWrite (BUZZER, HIGH); //turn buzzer on
+  } else {
+    Serial.println("Turn OFF BUZZER");
+    digitalWrite (BUZZER, LOW); //turn buzzer off
+  }
+
+}
+
+void readTemperatures() {
   Serial.println("read And Save Sensors");
   sensors.requestTemperatures();
   t1 = sensors.getTempCByIndex(0);
@@ -279,9 +289,9 @@ void updateDisplay() {
   display.display();
 }
 
-void handleLogin() {                         // If a POST request is made to URI /login
+void setupConfigParams() {
   if ( ! Server.hasArg("t1") || ! Server.hasArg("t2") || ! Server.hasArg("reptileName") || !Server.hasArg("relay1")) { // If the POST request doesn't have username and password data
-    Server.send(400, "text/plain", "400: Invalid Request");         // The request is invalid, so send HTTP status 400
+    Server.send(400, "text/plain", "400: Invalid Request");
     return;
   }
 
@@ -329,8 +339,7 @@ void handleLogin() {                         // If a POST request is made to URI
 
 }
 
-// Handle root url (/)
-void handle_root() {
+void handleRoot() {
   String t1Html = "<p>" + nameT1 + ": " + String(t1) + " C</p>";
   String t2Html = "<p>" + nameT2 + ": " + String(t2) + " C</p>";
   String hotDeviceHtml;
@@ -363,7 +372,7 @@ void dataPage() {
     return;
   }
 
-  String webString = "Humiditiy " + String((int)t1) + " C: " + String((int)t2) + " C";
+  String webString = "Temperatures: " + String((int)t1) + " C: " + String((int)t2) + " C";
   Serial.println(webString);
   Server.send(200, "text/plain", webString);
 }
@@ -386,10 +395,4 @@ void dataJSONPage() {
 
   Serial.println(jsonString);
   Server.send(200, "application/json", jsonString);
-
-}
-
-void tick() {
-  int state = digitalRead(LED_BUILTIN);
-  digitalWrite(LED_BUILTIN, !state);
 }

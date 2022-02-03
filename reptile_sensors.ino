@@ -19,7 +19,7 @@
 #define BUZZER D7
 #define CP_SSID "Reptile-Sensors-Portal"
 #define CP_PASSWORD "iot_2021"
-#define SW_VERSION "GM Di Francesco 0.1.1"
+#define SW_VERSION "GM Di Francesco 1.0.0"
 
 OneWire oneWireBus(ONE_WIRE_BUS_PIN);
 
